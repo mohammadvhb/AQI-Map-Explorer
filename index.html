@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AQI Map Explorer</title>
+    <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+    <link
+      href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css"
+      rel="stylesheet"
+    />
+    <script src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.3.0/mapbox-gl-draw.js"></script>
+    <link
+      rel="stylesheet"
+      href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.3.0/mapbox-gl-draw.css"
+      type="text/css"
+    />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      #map {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 100%;
+      }
+      #info-panel {
+        position: absolute;
+        bottom: 25px;
+        right: 10px;
+        z-index: 10;
+        background: rgba(255, 255, 255, 0.9);
+        padding: 15px;
+        border-radius: 8px;
+        max-width: 300px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      }
+      .mapboxgl-ctrl-draw-polygon {
+        background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCIgdmlld0JveD0iMCAwIDI0IDI0IiBzdHJva2Utd2lkdGg9IjEuNSIgc3Ryb2tlPSJjdXJyZW50Q29sb3IiIGZpbGw9Im5vbmUiPgogIDxwYXRoIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgZD0iTTEyIDMuMzc1bC04LjE3NSA4LjE3NUwxMiAyMC42MjVsMC43NS0wLjc1di02aDZsMC43NS0wLjc1TC0xMS4yNSA0LjEyNXpNMTIgMTcuMjVsLTYtNnYzaDZsMCwzem02LTZsLTYtNnYzaDZsMCwzeiIgLz4KPC9zdmc+Cg==");
+      }
+    </style>
+  </head>
+  <body class="bg-gray-100">
+    <div id="map"></div>
+
+    <div id="info-panel" class="shadow-lg">
+      <div class="text-center mb-4">
+        <h2 class="text-2xl font-bold text-gray-800 mb-2">AQI Map Explorer</h2>
+        <p class="text-sm text-gray-600 mb-3">
+          Explore Air Quality Across Regions
+        </p>
+      </div>
+      <div id="datetime" class="text-sm text-gray-600 mb-3 text-center"></div>
+
+      <div class="mb-3">
+        <h3 class="font-semibold text-gray-700 mb-2">How to Use:</h3>
+        <ul class="text-xs text-gray-600 list-disc list-inside">
+          <li>Use polygon tool to draw areas of interest</li>
+          <li>Hover over points to see AQI details</li>
+          <li>Color intensity indicates air quality levels</li>
+        </ul>
+      </div>
+
+      <div class="flex justify-center space-x-2">
+        <button
+          id="downloadBtn"
+          class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded text-sm"
+        >
+          Download Selected Area Data
+        </button>
+      </div>
+
+      <div class="mt-3 text-xs text-gray-500 text-center">
+        <p>AQI Color Guide:</p>
+        <div class="flex justify-between mt-1">
+          <span class="text-green-500">0-50: Good</span>
+          <span class="text-yellow-500">51-100: Moderate</span>
+          <span class="text-orange-500">101-150: Unhealthy</span>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      mapboxgl.accessToken =
+        "pk.eyJ1IjoibGFicGFycXVlcGF0cmljaW9zIiwiYSI6ImNqOWE4OGY3MjEweHEzM3FtZHl0dmV5azEifQ.uIJaP80p-gQXAvPG8tF-3w";
+
+      // Update date and time
+      function updateDateTime() {
+        const datetimeEl = document.getElementById("datetime");
+        const now = new Date();
+        datetimeEl.textContent = `Last Updated: ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
+      }
+
+      // Initial update and then every second
+      updateDateTime();
+      setInterval(updateDateTime, 1000);
+
+      const map = new mapboxgl.Map({
+        container: "map",
+        style: "mapbox://styles/mapbox/dark-v10",
+        center: [0, 0],
+        zoom: 2,
+        minzoom: 2,
+      });
+
+      // Initialize Mapbox Draw
+      const draw = new MapboxDraw({
+        displayControlsDefault: false,
+        controls: {
+          polygon: true,
+          trash: true,
+        },
+      });
+
+      // Add draw controls to the map
+      map.addControl(draw);
+
+      // Declare popup variable
+      let popup = null;
+      let fullHeatmapData = null;
+
+      map.on("load", () => {
+        fetch(
+          "https://api.waqi.info/v2/map/bounds/?latlng=41.97,40.71,23.22,69.28&token=c4021344e19d28dbc299b9b60f8467a2619af987"
+        )
+          .then((response) => response.json())
+          .then((data) => {
+            if (data.status !== "ok") {
+              console.error("Failed to fetch AQI data:", data.data);
+              return;
+            }
+
+            fullHeatmapData = {
+              type: "FeatureCollection",
+              features: data.data.map((station) => ({
+                type: "Feature",
+                geometry: {
+                  type: "Point",
+                  coordinates: [station.lon, station.lat],
+                },
+                properties: {
+                  aqi: parseInt(station.aqi) || 0,
+                  city: station.city || "Unknown",
+                },
+              })),
+            };
+
+            map.addSource("heatmap", {
+              type: "geojson",
+              data: fullHeatmapData,
+            });
+
+            // Circle layer configuration
+            map.addLayer({
+              id: "aqi-circle-layer",
+              type: "circle",
+              source: "heatmap",
+              paint: {
+                "circle-radius": [
+                  "interpolate",
+                  ["linear"],
+                  ["get", "aqi"],
+                  0,
+                  5,
+                  51,
+                  7,
+                  101,
+                  8,
+                  151,
+                  10,
+                  201,
+                  30,
+                  301,
+                  15,
+                ],
+                "circle-color": [
+                  "interpolate",
+                  ["linear"],
+                  ["get", "aqi"],
+                  0,
+                  "rgb(0,255,0)",
+                  51,
+                  "rgb(255,255,0)",
+                  101,
+                  "rgb(255,165,0)",
+                  151,
+                  "rgb(255,0,0)",
+                  201,
+                  "rgb(128,0,128)",
+                  301,
+                  "rgb(128,0,0)",
+                ],
+                "circle-opacity": 0.7,
+              },
+            });
+
+            // Circle layer configuration
+            map.addLayer({
+              id: "aqi-symbol-layer",
+              type: "symbol",
+              source: "heatmap",
+              layout: {
+                "text-field": ["to-string", ["get", "aqi"]], // Display AQI value as text
+                "text-size": 12,
+                "text-anchor": "center",
+                "text-offset": [0, 0], // Adjust text position
+              },
+              paint: {
+                "text-color": "#ffffff", // White text for visibility
+                "text-halo-color": "#000000", // Black halo for contrast
+                "text-halo-width": 1,
+              },
+            });
+
+            // Hover interactions
+            map.on("mouseenter", "aqi-circle-layer", (e) => {
+              map.getCanvas().style.cursor = "pointer";
+              const feature = e.features[0];
+
+              if (!feature || !feature.geometry) return; // Ensure valid feature
+
+              const coordinates = feature.geometry.coordinates.slice(); // Copy to prevent mutation
+              const { aqi, city } = feature.properties;
+
+              // Correct popup position
+              while (Math.abs(e.lngLat.lng - coordinates[0]) > 180) {
+                coordinates[0] += e.lngLat.lng > coordinates[0] ? 360 : -360;
+              }
+
+              // Remove previous popup
+              if (popup) {
+                popup.remove();
+              }
+
+              // Add new popup
+              popup = new mapboxgl.Popup({ offset: 25 })
+                .setLngLat(coordinates)
+                .setHTML(
+                  `
+      <strong>AQI: ${aqi}</strong><br `
+                )
+                .addTo(map);
+            });
+
+            map.on("mouseleave", "aqi-circle-layer", () => {
+              map.getCanvas().style.cursor = "";
+              if (popup) {
+                popup.remove();
+                popup = null;
+              }
+            });
+
+            // Download selected area functionality
+            const downloadBtn = document.getElementById("downloadBtn");
+            downloadBtn.addEventListener("click", () => {
+              // Get current drawn polygons
+              const data = draw.getAll();
+
+              if (data.features.length === 0) {
+                alert("Please draw an area first!");
+                return;
+              }
+
+              // Filter stations within the drawn polygon
+              const filteredData = {
+                type: "FeatureCollection",
+                features: fullHeatmapData.features.filter((station) =>
+                  turf.booleanPointInPolygon(station, data.features[0])
+                ),
+              };
+
+              // Create and download blob
+              const blob = new Blob([JSON.stringify(filteredData, null, 2)], {
+                type: "application/json",
+              });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = `aqi_data_selected_${new Date()
+                .toISOString()
+                .replace(/:/g, "-")}.geojson`;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+            });
+          })
+          .catch((err) => console.error("Error loading AQI data:", err));
+      });
+
+      // Include Turf.js for polygon point-in-polygon check
+      const script = document.createElement("script");
+      script.src = "https://unpkg.com/@turf/turf@6/turf.min.js";
+      document.head.appendChild(script);
+    </script>
+  </body>
+</html>
